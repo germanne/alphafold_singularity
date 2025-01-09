@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: nvidia/cuda:11.1.1-cudnn8-runtime-ubuntu18.04
+From: nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu20.04
 Stage: spython-base
 
 %files
@@ -26,13 +26,14 @@ Stage: spython-base
 # FROM directive resets ARGS, so we specify again (the value is retained if
 # previously set).
 
-apt-get update \
-&& DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
+export CUDA=12.2.2
+
+apt-get -o Acquire::https::Verify-Peer=false update \
+&& DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::https::Verify-Peer=false install --no-install-recommends -y \
 build-essential \
 cmake \
-cuda-command-line-tools-11-1 \
+cuda-command-line-tools-12-2 \
 git \
-hmmer \
 kalign \
 tzdata \
 wget \
@@ -42,7 +43,7 @@ wget \
 
 # Compile HHsuite from source.
 /bin/rm -rf /tmp/hh-suite \
-&& git clone --branch v3.3.0 https://github.com/soedinglab/hh-suite.git /tmp/hh-suite \
+&& git  -c http.sslVerify=false clone --branch v3.3.0 https://github.com/soedinglab/hh-suite.git /tmp/hh-suite \
 && mkdir /tmp/hh-suite/build \
 && cd /tmp/hh-suite/build \
 && cmake -DCMAKE_INSTALL_PREFIX=/opt/hhsuite .. \
@@ -52,35 +53,33 @@ wget \
 && /bin/rm -rf /tmp/hh-suite
 
 # Install Miniconda package manager.
-wget -q -P /tmp \
-https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh \
-&& bash /tmp/Miniconda3-latest-Linux-x86_64.sh -b -p /opt/conda \
-&& rm /tmp/Miniconda3-latest-Linux-x86_64.sh
+wget --no-check-certificate \
+https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-aarch64.sh -O /tmp/miniconda.sh\
+&& bash /tmp/miniconda.sh -u -b -p /opt/conda \
+&& rm /tmp/miniconda.sh
 
 # Install conda packages.
-PATH="/opt/conda/bin:/usr/local/cuda-11.1/bin:$PATH"
-conda install -qy conda==23.5.2 \
-&& conda install -y -c conda-forge \
-openmm=7.7.0 \
-cudatoolkit==11.1.1 \
-pdbfixer \
-pip \
-python=3.10 \
+PATH="/opt/conda/bin:/usr/local/cuda-12.2/bin:$PATH"
+LD_LIBRARY_PATH="/opt/conda/lib:/usr/local/cuda-12.2/lib:$LD_LIBRARY_PATH"
+conda config --set ssl_verify False
+conda install --quiet --yes conda==24.11.1 pip python=3.11 \
+&& conda install --quiet --yes --channel "nvidia/label/cuda-12.2.2" cuda=12.2 \
+&& conda install --quiet --yes --channel conda-forge openmm=8.0.0 pdbfixer \
 && conda clean --all --force-pkgs-dirs --yes
 
 ### /bin/cp -r . /app/alphafold
 
-wget -q -P /app/alphafold/alphafold/common/ \
+wget --no-check-certificate -q -P /app/alphafold/alphafold/common/ \
 https://git.scicore.unibas.ch/schwede/openstructure/-/raw/7102c63615b64735c4941278d92b554ec94415f8/modules/mol/alg/src/stereo_chemical_props.txt
 
 # Install pip packages.
 # N.B. The URL specifies the list of jaxlib releases.
-pip3 install --upgrade pip  --no-cache-dir \
-&& pip3 install -r /app/alphafold/requirements.txt --no-cache-dir \
-&& pip3 install --upgrade --no-cache-dir \
-jax==0.3.25 \
-jaxlib==0.3.25+cuda11.cudnn805 \
--f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+pip3 install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org --upgrade pip --no-cache-dir \
+&& pip3 install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org -r /app/alphafold/requirements.txt --no-cache-dir \
+&& pip3 install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org --trusted-host storage.googleapis.com --upgrade --no-cache-dir \
+   jax==0.4.26 \
+   jaxlib==0.4.26+cuda12.cudnn89 \
+   -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
 # Add SETUID bit to the ldconfig binary so that non-root users can run it.
 chmod u+s /sbin/ldconfig.real
@@ -89,11 +88,13 @@ chmod u+s /sbin/ldconfig.real
 ### Workaround below is to use /mnt/out/ld.so.cache for the ld cache file
 
 %environment
-export PATH="/opt/conda/bin:/usr/local/cuda-11.1/bin:$PATH"
+export PATH="/opt/conda/bin:$PATH"
 %runscript
 cd /app/alphafold
-ldconfig -C /mnt/output/ld.so.cache
-exec python /app/alphafold/run_alphafold.py "$@"
+echo $'#!/bin/bash\n\
+ldconfig\n\
+python /app/alphafold/run_alphafold.py "$@"' > /app/run_alphafold.sh \
+  && chmod +x /app/run_alphafold.sh
 # %startscript
 # cd /app/alphafold
 # exec python /app/alphafold/run_alphafold.py "$@"
